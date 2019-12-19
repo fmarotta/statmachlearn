@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+
+export LC_ALL=POSIX
+exec gawk -F'\t' -v OFS='\t' -v OFMT='%.17g' -v CONVFMT='%.17g' --re-interval "$@"

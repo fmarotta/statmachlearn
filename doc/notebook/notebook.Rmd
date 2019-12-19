@@ -1,0 +1,208 @@
+---
+title: "MAT0043"
+subtitle: "Figures"
+author: "Federico Marotta"
+output:
+  html_document:
+    code_folding: hide
+    df_print: paged
+    fig_caption: yes
+    number_sections: yes
+    theme: united
+    toc: yes
+    toc_float: yes
+date: '`r format(Sys.time(), "%B %d %Y")`'
+---
+
+```{r setup, include = FALSE}
+library(data.table)
+library(fplyr)
+library(ggplot2)
+library(ggbiplot)
+library(knitr)
+
+theme_set(theme_bw())
+
+opts_chunk$set(fig.width = 8, fig.height = 4.5)
+opts_knit$set(root.dir = normalizePath("/mnt/red/fmarotta/bioinfotree/prj/expr_reg_pred/results/"))
+```
+
+# Gene Expression
+
+```{r expr_setup}
+samples <- readLines("../data/meta/samples.txt")
+genes <- readLines("../data/meta/genes.txt")
+expr <- fread("expression/adjusted/Cells_EBV_transformed_lymphocytes.expression_residuals.tsv")
+expr <- expr[IID %in% samples & GENE %in% genes]
+
+expr_bid <- expr[GENE == "ENSG00000015475.14"]
+```
+
+```{r expr_hist}
+ggplot(expr_bid) +
+  aes(x = EXPRESSION) +
+  geom_histogram(aes(y = ..density..), bins = 80, fill = "dodgerblue") +
+  geom_vline(xintercept = mean(expr_bid$EXPRESSION),
+             linetype = 2,
+             color = "brown",
+             lwd = .8) +
+  geom_vline(xintercept = sd(expr_bid$EXPRESSION),
+             linetype = 3,
+             color = "brown",
+             lwd = .7) +
+  geom_vline(xintercept = -sd(expr_bid$EXPRESSION),
+             linetype = 3,
+             color = "brown",
+             lwd = .7) +
+  geom_density() +
+  labs(title = paste("Histogram & Kernel Density Estimate of BID's Expression"),
+       x = "Expression",
+       y = "Density") +
+  theme(plot.title = element_text(hjust = .5))
+```
+
+```{r expr_qq}
+ggplot(expr_bid) +
+  aes(sample = EXPRESSION ) +
+  geom_qq_line(color = "brown") +
+  geom_qq(color = "black") +
+  labs(title = paste("Normal Q-Q plot of BID's Expression"),
+       x = "Theoretical",
+       y = "Expression") +
+  theme(plot.title = element_text(hjust = .5))
+
+```
+
+# TBA
+
+```{r tba_setup}
+reshape_esum <- function(tba) {
+    tba <- tba[, .(TBA = log(sum(exp(TBA)))), by = c("GENE", "MODEL", "IID")]
+    dcast(tba, GENE + IID ~ MODEL, value.var = "TBA")
+}
+reshape_sum <- function(tba) {
+    tba <- tba[, .(TBA = sum(TBA)), by = c("GENE", "MODEL", "IID")]
+    dcast(tba, GENE + IID ~ MODEL, value.var = "TBA")
+}
+reshape_stagger <- function(tba) {
+    tba <- dcast(tba, GENE + IID + MODEL ~ REGION, value.var = "TBA")
+    dcast(tba, GENE + IID ~ MODEL, value.var = names(tba)[grep("^ENSR", names(tba))])
+}
+
+tba_bid <- fdply("tba/gtex/chr22/GM12878.Cells_EBV_transformed_lymphocytes.tba.tsv",
+                 col.names = c("GENE", "REGION", "MODEL", "IID", "TBA"))
+tba_esum <- reshape_esum(tba_bid)
+```
+
+## PCA
+
+```{r tba_pca}
+pc <- prcomp(tba_esum[, 3:length(tba_esum)])
+pc.summ <- cbind(PC = 1:nrow(tba_pca), as.data.table(t(summary(pc)$importance)))
+```
+
+```{r tba_screeplot}
+ggplot(pc.summ) +
+  aes(x = PC, y = `Proportion of Variance`) + 
+  geom_line(col = "black") +
+  geom_point(col = "black") +
+  geom_vline(xintercept = 5, lty = 2, col = "brown") +
+  xlim(c(0, 30)) +
+  labs(title = paste("Screeplot of the TBA for BID (first 30 PCs)")) +
+  theme(plot.title = element_text(hjust = .5))
+
+# ggplot(pc.summ) +
+#     aes(x = PC, y = `Cumulative Proportion`) +
+#     geom_point() +
+#     geom_line()
+```
+
+```{r tba_biplot}
+ggbiplot(pc, var.axes = F, labels = tba_pca$IID, labels.size = 2) +
+  coord_equal(ratio = .5) +
+  labs(title = paste("Biplot of the TBA for BID")) +
+  theme(plot.title = element_text(hjust = .5))
+```
+
+# Models
+
+```{r models_setup}
+d <- merge(expr, tba_esum, by = c("GENE", "IID"))
+```
+
+## Expression vs TBA
+
+```{r expr_vs_tba}
+tf <- names(sort(sapply(d[, -(1:3)], function(tf) cor(d$EXPRESSION, tf)), decreasing = TRUE)[1])
+tf_name <- strsplit(tf, "_", fixed = T)[[1]][1]
+
+ggplot(d) +
+  aes_string(y = "EXPRESSION", x = tf) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(title = paste("Expression of BID vs TBA for", tf_name),
+       x = paste("log(TBA) for", tf_name),
+       y = "Expression") +
+  theme(plot.title = element_text(hjust = .5))
+```
+
+## Comparisons
+
+```{r comparisons_setup}
+ridge <- fread("models/ridge/tba/gtex/chr22/GM12878.Cells_EBV_transformed_lymphocytes.perf_aggr.tsv")
+tigar <- fread("models/tigar/tba/gtex/DPR_CHR22/CHR22_DPR_training_info.txt")
+m <- merge(ridge[, c("data.name", "pred_perf_R2")], tigar[, c("TargetID", "5-fold-CV-R2")],
+           by.x = "data.name", by.y = "TargetID")
+names(m) <- c("GENE", "Ridge", "TIGAR")
+m <- melt(m, id.vars = "GENE", measure.vars = c("Ridge", "TIGAR"), variable.name = "MODEL", value.name = "R2")
+```
+
+```{r distributions}
+ggplot(m) +
+  aes(x = R2, fill = MODEL) +
+  geom_density(alpha = .4) +
+  geom_vline(xintercept = mean(m[MODEL == "Ridge", R2]), color = 2, alpha = .4, lty = 2, lwd = 1) +
+  geom_vline(xintercept = mean(m[MODEL == "TIGAR", R2]), color = 5, alpha = .4, lty = 2, lwd = 1) +
+  # scale_fill_manual(values = c("limegreen", "lightsalmon")) +
+  labs(title = expression("Density of "*rho^2),
+       x = expression(rho^2),
+       y = "Density",
+       fill = "Model") +
+  theme(plot.title = element_text(hjust = .5),)
+```
+
+```{r qqplot}
+qq <- setDT(qqplot(m[MODEL == "TIGAR", R2], m[MODEL == "Ridge", R2], plot.it = F))
+
+ggplot(qq) +
+  geom_point(aes(x = x, y = y)) +
+  geom_abline(slope = 1, intercept = 0) +
+  geom_segment(aes(x = quantile(qq$x)[1], y = quantile(qq$y)[1], xend = quantile(qq$x)[1], yend = quantile(qq$y)[2]), linetype = 2, col = "brown") +
+  geom_segment(aes(x = quantile(qq$x)[1], y = quantile(qq$y)[2], xend = quantile(qq$x)[2], yend = quantile(qq$y)[2]), linetype = 2, col = "brown") +
+  geom_segment(aes(x = quantile(qq$x)[2], y = quantile(qq$y)[2], xend = quantile(qq$x)[2], yend = quantile(qq$y)[3]), linetype = 2, col = "brown") +
+  geom_segment(aes(x = quantile(qq$x)[2], y = quantile(qq$y)[3], xend = quantile(qq$x)[3], yend = quantile(qq$y)[3]), linetype = 2, col = "brown") +
+  geom_segment(aes(x = quantile(qq$x)[3], y = quantile(qq$y)[3], xend = quantile(qq$x)[3], yend = quantile(qq$y)[4]), linetype = 2, col = "brown") +
+  geom_segment(aes(x = quantile(qq$x)[3], y = quantile(qq$y)[4], xend = quantile(qq$x)[4], yend = quantile(qq$y)[4]), linetype = 2, col = "brown") +
+  geom_segment(aes(x = quantile(qq$x)[4], y = quantile(qq$y)[4], xend = quantile(qq$x)[4], yend = quantile(qq$y)[5]), linetype = 2, col = "brown") +
+  geom_segment(aes(x = quantile(qq$x)[4], y = quantile(qq$y)[5], xend = quantile(qq$x)[5], yend = quantile(qq$y)[5]), linetype = 2, col = "brown") +
+  geom_segment(aes(x = quantile(qq$x)[1], y = quantile(qq$y)[1], xend = quantile(qq$x)[2], yend = quantile(qq$y)[1]), linetype = 2, col = "brown") +
+  geom_segment(aes(x = quantile(qq$x)[2], y = quantile(qq$y)[1], xend = quantile(qq$x)[2], yend = quantile(qq$y)[2]), linetype = 2, col = "brown") +
+  geom_segment(aes(x = quantile(qq$x)[2], y = quantile(qq$y)[2], xend = quantile(qq$x)[3], yend = quantile(qq$y)[2]), linetype = 2, col = "brown") +
+  geom_segment(aes(x = quantile(qq$x)[3], y = quantile(qq$y)[2], xend = quantile(qq$x)[3], yend = quantile(qq$y)[3]), linetype = 2, col = "brown") +
+  geom_segment(aes(x = quantile(qq$x)[3], y = quantile(qq$y)[3], xend = quantile(qq$x)[4], yend = quantile(qq$y)[3]), linetype = 2, col = "brown") +
+  geom_segment(aes(x = quantile(qq$x)[4], y = quantile(qq$y)[3], xend = quantile(qq$x)[4], yend = quantile(qq$y)[4]), linetype = 2, col = "brown") +
+  geom_segment(aes(x = quantile(qq$x)[4], y = quantile(qq$y)[4], xend = quantile(qq$x)[5], yend = quantile(qq$y)[4]), linetype = 2, col = "brown") +
+  geom_segment(aes(x = quantile(qq$x)[5], y = quantile(qq$y)[4], xend = quantile(qq$x)[5], yend = quantile(qq$y)[5]), linetype = 2, col = "brown") +
+  geom_vline(xintercept = mean(qq$x), lty = 1, col = "orange") +
+  geom_hline(yintercept = mean(qq$y), lty = 1, col = "orange") +
+  labs(title = expression("Q-Q plot of "*rho^2),
+       x = expression("TIGAR "*rho^2),
+       y = expression("Ridge "*rho^2)) +
+  theme(plot.title = element_text(hjust = .5))
+
+```
+
+## Nested CV
+
+```{r nested_cv}
+```
