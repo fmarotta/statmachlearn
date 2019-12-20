@@ -19,12 +19,13 @@ library(data.table)
 library(fplyr)
 library(ggplot2)
 library(ggbiplot)
+library(gridExtra)
 library(knitr)
 
 theme_set(theme_bw())
 
 opts_chunk$set(fig.width = 8, fig.height = 4.5)
-opts_knit$set(root.dir = normalizePath("/mnt/red/fmarotta/bioinfotree/prj/expr_reg_pred/results/"))
+opts_knit$set(root.dir = normalizePath("/home/fmarotta/MAT0043/results/"))
 ```
 
 # Gene Expression
@@ -39,7 +40,7 @@ expr_bid <- expr[GENE == "ENSG00000015475.14"]
 ```
 
 ```{r expr_hist}
-ggplot(expr_bid) +
+g1 <- ggplot(expr_bid) +
   aes(x = EXPRESSION) +
   geom_histogram(aes(y = ..density..), bins = 80, fill = "dodgerblue") +
   geom_vline(xintercept = mean(expr_bid$EXPRESSION),
@@ -55,22 +56,25 @@ ggplot(expr_bid) +
              color = "brown",
              lwd = .7) +
   geom_density() +
-  labs(title = paste("Histogram & Kernel Density Estimate of BID's Expression"),
+  labs(subtitle = paste("Histogram & Kernel Density Estimate"),
        x = "Expression",
-       y = "Density") +
-  theme(plot.title = element_text(hjust = .5))
+       y = "Density")#  +
+  # theme(plot.title = element_text(hjust = .5))
 ```
 
 ```{r expr_qq}
-ggplot(expr_bid) +
+g2 <- ggplot(expr_bid) +
   aes(sample = EXPRESSION ) +
   geom_qq_line(color = "brown") +
   geom_qq(color = "black") +
-  labs(title = paste("Normal Q-Q plot of BID's Expression"),
+  labs(subtitle = paste("Normal Q-Q plot"),
        x = "Theoretical",
-       y = "Expression") +
-  theme(plot.title = element_text(hjust = .5))
+       y = "Expression")#  +
+  # theme(plot.title = element_text(hjust = .5))
+```
 
+```{r}
+grid.arrange(g1, g2, ncol = 2, top = "Expression of BID")
 ```
 
 # TBA
@@ -98,18 +102,18 @@ tba_esum <- reshape_esum(tba_bid)
 
 ```{r tba_pca}
 pc <- prcomp(tba_esum[, 3:length(tba_esum)])
-pc.summ <- cbind(PC = 1:nrow(tba_pca), as.data.table(t(summary(pc)$importance)))
+pc.summ <- cbind(PC = 1:nrow(tba_esum), as.data.table(t(summary(pc)$importance)))
 ```
 
 ```{r tba_screeplot}
-ggplot(pc.summ) +
+g1 <- ggplot(pc.summ) +
   aes(x = PC, y = `Proportion of Variance`) + 
   geom_line(col = "black") +
   geom_point(col = "black") +
   geom_vline(xintercept = 5, lty = 2, col = "brown") +
   xlim(c(0, 30)) +
-  labs(title = paste("Screeplot of the TBA for BID (first 30 PCs)")) +
-  theme(plot.title = element_text(hjust = .5))
+  labs(subtitle = paste("Screeplot of the TBA (first 30 PCs)")) #+
+  # theme(plot.title = element_text(hjust = .5))
 
 # ggplot(pc.summ) +
 #     aes(x = PC, y = `Cumulative Proportion`) +
@@ -118,10 +122,14 @@ ggplot(pc.summ) +
 ```
 
 ```{r tba_biplot}
-ggbiplot(pc, var.axes = F, labels = tba_pca$IID, labels.size = 2) +
+g2 <- ggbiplot(pc, var.axes = F, labels = tba_esum$IID, labels.size = 2) +
   coord_equal(ratio = .5) +
-  labs(title = paste("Biplot of the TBA for BID")) +
-  theme(plot.title = element_text(hjust = .5))
+  labs(subtitle = paste("Biplot of the TBA"))# +
+  # theme(plot.title = element_text(hjust = .5))
+```
+
+```{r}
+grid.arrange(g1, g2, ncol = 2, top = "PCA of the affinities for BID")
 ```
 
 # Models
@@ -150,7 +158,7 @@ ggplot(d) +
 
 ```{r comparisons_setup}
 ridge <- fread("models/ridge/tba/gtex/chr22/GM12878.Cells_EBV_transformed_lymphocytes.perf_aggr.tsv")
-tigar <- fread("models/tigar/tba/gtex/DPR_CHR22/CHR22_DPR_training_info.txt")
+tigar <- fread("../../bacmod/models/tigar/tba/gtex/DPR_CHR22/CHR22_DPR_training_info.txt")
 m <- merge(ridge[, c("data.name", "pred_perf_R2")], tigar[, c("TargetID", "5-fold-CV-R2")],
            by.x = "data.name", by.y = "TargetID")
 names(m) <- c("GENE", "Ridge", "TIGAR")
@@ -205,4 +213,31 @@ ggplot(qq) +
 ## Nested CV
 
 ```{r nested_cv}
+m <- readRDS("models/ranger/tba/gtex/chr22/GM12878.Cells_EBV_transformed_lymphocytes.perf_inner.Rds")
+
+len <- sort(unique(unlist(apply(a, 1, unique))), decreasing = T)[3]
+lengths <- sapply(m, function(gene) sapply(gene, function(fold) nrow(fold$aggr)))
+deltas <- sapply(m, function(gene) sapply(gene, function(fold) max(fold$aggr$pred_perf_R2, na.rm = T) - min(fold$aggr$pred_perf_R2, na.rm = T)))
+
+long_arr_ind <- which(lengths == len, arr.ind = T)
+long <- which(lengths == len)
+ind <- long_arr_ind[order(deltas[long], decreasing = T)[1], ]
+
+
+gene <- ind[2]
+fold <- ind[1]
+i <- m[[gene]][[fold]]$aggr
+j <- i[, .(pred_perf_R2 = mean(pred_perf_R2, na.rm = T)), by = c("mtry", "nodesize")]
+ggplot() +
+  # aes(x = mtry, y = nodesize, z = pred_perf_R2, fill = pred_perf_R2) +
+  geom_tile(data = i, aes(x = mtry, y = nodesize, fill = pred_perf_R2), width = 11, height = 2.3) +
+  # geom_contour(data = j, aes(x = mtry, y = nodesize, z = pred_perf_R2), bins = 50) # +
+  geom_text(data = i[1, ], aes(x = mtry, y = nodesize), label = "Default", vjust = -1.2) +
+  geom_text(data = i[which.max(pred_perf_R2)], aes(x = mtry, y = nodesize), label = "Best", hjust = -.5) +
+  scale_fill_gradient(low = "red", high = "blue") +
+  labs(title = expression("Explored RF Parameters and Corresponding "*rho^2),
+       x = "mtry",
+       y = "nodesize",
+       fill = expression("CV "*rho^2)) +
+  theme(plot.title = element_text(hjust = .5))
 ```

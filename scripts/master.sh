@@ -2,7 +2,7 @@
 
 # The master script to call everything else.
 #
-# Requirements: a machine with Ubuntu, conda, and git.
+# Requirements: a machine with Ubuntu and conda.
 #
 # Federico Marotta (federico.marotta@edu.unito.it)
 # Dec 2019
@@ -273,6 +273,7 @@ Rscript scripts/6-tigar_expr.R \
     --expr=results/expression/adjusted/${tissue}.expression_residuals.tsv \
     --tigexpr=results/expression/adjusted/${tissue}.tigar_expression.tsv
 
+cd results/models/tigar
 echo "Running TIGAR"
 ./TIGAR_Model_Train.sh \
     --model DPR \
